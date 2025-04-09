@@ -112,7 +112,7 @@ jobs:
           echo "Starting Make.py build using ${MAKE_PY_SCRIPT_PATH}..."
 
           # Execute Make.py build command - Putting command on a SINGLE LINE to avoid shell parsing issues with backslashes
-          python3 "${MAKE_PY_SCRIPT_PATH}" build --configurationPath="${{ env.CONFIG_JSON_PATH }}" --output-build-artifacts-path="${{ env.BUILD_OUTPUT_PATH }}" --configuration=release_arm64 buildNumber=100001 --codesigningInformationPath=build-system/fake-codesigning
+          python3 "${MAKE_PY_SCRIPT_PATH}" build --configurationPath="${{ env.CONFIG_JSON_PATH }}" --output-build-artifacts-path="${{ env.BUILD_OUTPUT_PATH }}" --configuration=release_arm64 --buildNumber=100001 --codesigningInformationPath=build-system/fake-codesigning
 
           # If Make.py needs other flags identified from README, add them to the end of the single line above. E.g:
           # python3 "${MAKE_PY_SCRIPT_PATH}" build --configurationPath="${{ env.CONFIG_JSON_PATH }}" --output-build-artifacts-path="${{ env.BUILD_OUTPUT_PATH }}" --configuration=release_universal --some-other-flag
