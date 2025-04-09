@@ -120,7 +120,8 @@ jobs:
             --configuration=release_arm64 \
             --buildNumber=100001 \
             --build-path="${{ env.BUILD_OUTPUT_PATH }}" \
-            --disable-provisioning # <-- VERIFY/REPLACE THIS FLAG NAME
+            --codesigningInformationPath=build-system/fake-codesigning
+            # <-- VERIFY/REPLACE THIS FLAG NAME
             # Add other necessary flags from README (e.g., --platform=ios, specific build number if required)
 
           echo "Make.py build finished."
