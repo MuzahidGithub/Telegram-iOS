@@ -22,8 +22,8 @@ jobs:
       DEBIAN_FRONTEND: noninteractive
       # Define path for the generated JSON config file
       CONFIG_JSON_PATH: ${{ github.workspace }}/telegram_config.json
-      # Define path for Make.py artifacts (IPA, DSYMs zip)
-      BUILD_OUTPUT_PATH: ${{ github.workspace }}/build_output
+      # Default DSYM location (parent directory) - Still useful for DSYM search
+      DEFAULT_DSYM_DIR: bazel-bin/Telegram
 
     steps:
       - name: Check for Secrets Availability
@@ -111,42 +111,109 @@ jobs:
 
           echo "Starting Make.py build using ${MAKE_PY_SCRIPT_PATH}..."
 
-          # Execute Make.py build command - Putting command on a SINGLE LINE to avoid shell parsing issues with backslashes
-          python3 "${MAKE_PY_SCRIPT_PATH}" build --configurationPath="${{ env.CONFIG_JSON_PATH }}" --output-build-artifacts-path="${{ env.BUILD_OUTPUT_PATH }}" --configuration=release_arm64 --buildNumber=100001 --codesigningInformationPath=build-system/fake-codesigning
+          # Execute Make.py build command - Using SINGLE LINE to avoid shell parsing issues
+          python3 "${MAKE_PY_SCRIPT_PATH}" build --configurationPath="${{ env.CONFIG_JSON_PATH }}" --configuration=release_arm64 --buildNumber=100001 --codesigningInformationPath=build-system/fake-codesigning
+          # Add other necessary flags from README if any (e.g., --platform=ios) to the end of the single line above.
 
-          # If Make.py needs other flags identified from README, add them to the end of the single line above. E.g:
-          # python3 "${MAKE_PY_SCRIPT_PATH}" build --configurationPath="${{ env.CONFIG_JSON_PATH }}" --output-build-artifacts-path="${{ env.BUILD_OUTPUT_PATH }}" --configuration=release_universal --some-other-flag
-
-          echo "Make.py build finished. Artifacts should be in ${{ env.BUILD_OUTPUT_PATH }}"
-          ls -lA "${{ env.BUILD_OUTPUT_PATH }}" # List output directory contents
+          echo "Make.py build finished."
         shell: bash
         # API Keys are passed via environment variables implicitly to the JSON generation step
 
-      # --- Package IPA Step (REMOVED) ---
-      # This step is no longer needed as Make.py copies the IPA directly when using --output-build-artifacts-path
+      # --- Find the generated IPA file ---
+      - name: Find Telegram.ipa
+        id: find_ipa # Give step ID to reference output
+        run: |
+          echo "Searching for Telegram.ipa in bazel-out and bazel-bin..."
+          # Search likely output directories. Use mapfile to handle potential newlines if multiple found.
+          # Redirect stderr to avoid noise if dirs don't exist yet.
+          mapfile -t ipa_files < <(find bazel-out bazel-bin -name "Telegram.ipa" -type f -print 2>/dev/null)
+          file_count=${#ipa_files[@]}
 
+          echo "Found ${file_count} 'Telegram.ipa' file(s)."
+
+          if [ "$file_count" -eq 1 ]; then
+            # Exactly one found, this is the expected outcome
+            IPA_PATH="${ipa_files[0]}"
+            echo "Located IPA at: ${IPA_PATH}"
+            # Set the path as an output variable for the next step
+            echo "ipa_path=${IPA_PATH}" >> $GITHUB_OUTPUT
+          elif [ "$file_count" -eq 0 ]; then
+            # None found, fail the build
+            echo "Error: Telegram.ipa not found in bazel-out or bazel-bin after build."
+            echo "Listing contents of likely output directories for debugging:"
+            ls -lAR bazel-bin/Telegram || echo "Could not list bazel-bin/Telegram"
+            ls -lAR bazel-out || echo "Could not list bazel-out"
+            exit 1
+          else
+            # Multiple found, this is ambiguous and likely an error
+            echo "Error: Found multiple Telegram.ipa files:"
+            printf "  %s\n" "${ipa_files[@]}"
+            exit 1
+          fi
+        shell: bash
+
+      # --- Prepare DSYM Artifact (Optional but Recommended) ---
+      - name: Prepare DSYM Artifact
+        id: package_dsyms
+        if: success() # Only run if build succeeded
+        run: |
+          DSYM_ZIP_NAME="Telegram.DSYMs.zip"
+          DSYM_ZIP_PATH="${{ runner.temp }}/${DSYM_ZIP_NAME}"
+          # Search in the likely directory relative to bazel-bin
+          DSYM_SOURCE_DIR="${{ env.DEFAULT_DSYM_DIR }}"
+          DSYM_TEMP_PACKAGE_DIR="${{ runner.temp }}/dsym_package"
+
+          echo "Searching for .dSYM bundles in ${DSYM_SOURCE_DIR}"
+          # Count .dSYM directories within the source dir
+          dsym_files_count=$(find "${DSYM_SOURCE_DIR}" -maxdepth 1 -name "*.dSYM" -type d 2>/dev/null | wc -l)
+
+          if [ $dsym_files_count -gt 0 ]; then
+            echo "Found .dSYM files. Preparing zip artifact at ${DSYM_ZIP_PATH}"
+            mkdir -p "${DSYM_TEMP_PACKAGE_DIR}"
+            # Copy only the .dSYM directories found directly within DSYM_SOURCE_DIR
+            find "${DSYM_SOURCE_DIR}" -maxdepth 1 -name "*.dSYM" -type d -exec cp -R {} "${DSYM_TEMP_PACKAGE_DIR}/" \;
+            echo "Contents to be zipped:"
+            ls -lA "${DSYM_TEMP_PACKAGE_DIR}"
+            # Create zip file from the copied dSYMs
+            (cd "${DSYM_TEMP_PACKAGE_DIR}" && zip -qr "${DSYM_ZIP_PATH}" .)
+            # Set output for the upload step
+            echo "dsym_zip_path=${DSYM_ZIP_PATH}" >> $GITHUB_OUTPUT
+            echo "DSYM artifact created."
+          else
+            echo "No .dSYM files found in ${DSYM_SOURCE_DIR}. Skipping DSYM artifact."
+            echo "dsym_zip_path=" >> $GITHUB_OUTPUT # Ensure output is blank
+          fi
+        shell: bash
+
+      # --- Upload IPA Artifact ---
       - name: Upload Unsigned IPA Artifact
         uses: actions/upload-artifact@v4
         with:
           name: Telegram-iOS-Unsigned-IPA
-          # Path directly to the IPA file copied by Make.py
-          path: ${{ env.BUILD_OUTPUT_PATH }}/Telegram.ipa
+          # Path uses the output from the find_ipa step
+          path: ${{ steps.find_ipa.outputs.ipa_path }}
           if-no-files-found: error # Fail the step if IPA is missing
 
+      # --- Upload DSYM Artifact ---
       - name: Upload DSYM Artifact (Optional)
-        # The Make.py script also creates a Telegram.DSYMs.zip
-        if: success() # Only upload if build succeeded
+        # Upload the zip created in the 'Prepare DSYM Artifact' step if it exists
+        if: success() && steps.package_dsyms.outputs.dsym_zip_path != ''
         uses: actions/upload-artifact@v4
         with:
           name: Telegram-iOS-DSYMs
-          path: ${{ env.BUILD_OUTPUT_PATH }}/Telegram.DSYMs.zip
-          if-no-files-found: ignore # Don't fail if DSYM zip is missing for some reason
+          path: ${{ steps.package_dsyms.outputs.dsym_zip_path }}
+          if-no-files-found: error # Should exist if path is set
 
       - name: Clean up build directories (optional)
         if: always() # Run even if previous steps fail
         run: |
           echo "Cleaning up intermediate build directories..."
-          rm -rf "${{ env.BUILD_OUTPUT_PATH }}" # Remove Make.py output dir
-          # No need to remove runner.temp/ipa_output anymore
+          # Remove common build output dirs - adjust if Make.py uses others
+          rm -rf "./build"
+          rm -rf "./bazel-out"
+          rm -rf "./bazel-bin"
           rm -f "${{ env.CONFIG_JSON_PATH }}" # Remove generated config file
+          # Optionally remove zipped DSYMs from temp
+          rm -f "${{ runner.temp }}/Telegram.DSYMs.zip"
+          rm -rf "${{ runner.temp }}/dsym_package"
         shell: bash
