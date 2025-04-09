@@ -20,10 +20,10 @@ jobs:
       TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
       # Force non-interactive mode for scripts if needed (sometimes helps in CI)
       DEBIAN_FRONTEND: noninteractive
-      # Define output path for Make.py - Use workspace for absolute path clarity
+      # Define path for the generated JSON config file
+      CONFIG_JSON_PATH: ${{ github.workspace }}/telegram_config.json
+      # Define path for Make.py artifacts (IPA, DSYMs zip)
       BUILD_OUTPUT_PATH: ${{ github.workspace }}/build_output
-      # Define path for the generated JSON config file - CORRECTED to use workspace
-      CONFIG_JSON_PATH: ${{ github.workspace }}/telegram_config.json # Use workspace instead of runner.temp
 
     steps:
       - name: Check for Secrets Availability
@@ -112,71 +112,48 @@ jobs:
           echo "Starting Make.py build using ${MAKE_PY_SCRIPT_PATH}..."
 
           # Execute Make.py build command from repository root
-          # Added --configurationPath pointing to the generated JSON file (path now uses workspace)
+          # Added --configurationPath and --output-build-artifacts-path arguments
           # Using 'release_universal' for configuration based on previous error message
           # *** IMPORTANT: Still verify the exact flag for disabling signing (--disable-provisioning is placeholder) ***
           python3 "${MAKE_PY_SCRIPT_PATH}" build \
             --configurationPath="${{ env.CONFIG_JSON_PATH }}" \
+            --output-build-artifacts-path="${{ env.BUILD_OUTPUT_PATH }}" \ # <-- CORRECTED ARGUMENT
             --configuration=release_arm64 \
             --buildNumber=100001 \
-            --build-path="${{ env.BUILD_OUTPUT_PATH }}" \
             --codesigningInformationPath=build-system/fake-codesigning
             # <-- VERIFY/REPLACE THIS FLAG NAME
             # Add other necessary flags from README (e.g., --platform=ios, specific build number if required)
 
-          echo "Make.py build finished."
+          echo "Make.py build finished. Artifacts should be in ${{ env.BUILD_OUTPUT_PATH }}"
+          ls -lA "${{ env.BUILD_OUTPUT_PATH }}" # List output directory contents
         shell: bash
         # API Keys are passed via environment variables implicitly to the JSON generation step
 
-      # --- Package IPA Step ---
-      # Assumes Make.py created an unsigned .app bundle in BUILD_OUTPUT_PATH
-      - name: Package Unsigned IPA
-        run: |
-          echo "Packaging IPA..."
-          # Verify the exact output .app name (likely Telegram.app)
-          APP_NAME="Telegram.app"
-          APP_PATH="${{ env.BUILD_OUTPUT_PATH }}/${APP_NAME}"
-          # Using runner.temp is fine here inside a 'run' block
-          IPA_OUTPUT_DIR="${{ runner.temp }}/ipa_output"
-          IPA_NAME="Telegram-unsigned.ipa"
-          FINAL_IPA_PATH="${{ runner.temp }}/${IPA_NAME}" # Full path for artifact upload
-
-          if [ ! -d "${APP_PATH}" ]; then
-             echo "Error: .app bundle not found at expected Make.py output location: ${APP_PATH}"
-             echo "Check the output of the 'Build App using Make.py' step or the script's arguments."
-             echo "Listing contents of build output path:"
-             ls -lA "${{ env.BUILD_OUTPUT_PATH }}"
-             exit 1
-          fi
-
-          # Create the Payload directory and copy the .app into it
-          PAYLOAD_DIR="${IPA_OUTPUT_DIR}/Payload"
-          mkdir -p "${PAYLOAD_DIR}"
-          echo "Copying ${APP_PATH} to ${PAYLOAD_DIR}/"
-          cp -R "${APP_PATH}" "${PAYLOAD_DIR}/"
-
-          # Zip the Payload directory to create the final IPA
-          echo "Zipping IPA..."
-          (cd "${IPA_OUTPUT_DIR}" && zip -qr "../${IPA_NAME}" Payload)
-
-          echo "Unsigned IPA created at ${FINAL_IPA_PATH}"
-        shell: bash
+      # --- Package IPA Step (REMOVED) ---
+      # This step is no longer needed as Make.py copies the IPA directly when using --output-build-artifacts-path
 
       - name: Upload Unsigned IPA Artifact
         uses: actions/upload-artifact@v4
         with:
           name: Telegram-iOS-Unsigned-IPA
-          # Using runner.temp is fine here inside action inputs that support expressions
-          path: ${{ runner.temp }}/Telegram-unsigned.ipa
+          # Path directly to the IPA file copied by Make.py
+          path: ${{ env.BUILD_OUTPUT_PATH }}/Telegram.ipa
           if-no-files-found: error # Fail the step if IPA is missing
+
+      - name: Upload DSYM Artifact (Optional)
+        # The Make.py script also creates a Telegram.DSYMs.zip
+        if: success() # Only upload if build succeeded
+        uses: actions/upload-artifact@v4
+        with:
+          name: Telegram-iOS-DSYMs
+          path: ${{ env.BUILD_OUTPUT_PATH }}/Telegram.DSYMs.zip
+          if-no-files-found: ignore # Don't fail if DSYM zip is missing for some reason
 
       - name: Clean up build directories (optional)
         if: always() # Run even if previous steps fail
         run: |
           echo "Cleaning up intermediate build directories..."
           rm -rf "${{ env.BUILD_OUTPUT_PATH }}" # Remove Make.py output dir
-          # Using runner.temp is fine here inside a 'run' block
-          rm -rf "${{ runner.temp }}/ipa_output" # Remove IPA packaging dir
-          # Remove generated config file (path now uses workspace)
-          rm -f "${{ env.CONFIG_JSON_PATH }}"
+          # No need to remove runner.temp/ipa_output anymore
+          rm -f "${{ env.CONFIG_JSON_PATH }}" # Remove generated config file
         shell: bash
