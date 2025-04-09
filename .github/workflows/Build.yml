@@ -22,6 +22,8 @@ jobs:
       DEBIAN_FRONTEND: noninteractive
       # Define output path for Make.py - Use workspace for absolute path clarity
       BUILD_OUTPUT_PATH: ${{ github.workspace }}/build_output
+      # Define path for the generated JSON config file
+      CONFIG_JSON_PATH: ${{ runner.temp }}/telegram_config.json
 
     steps:
       - name: Check for Secrets Availability
@@ -67,6 +69,34 @@ jobs:
           # Add any other setup steps mentioned in README (e.g., pip install) if required by Make.py
         shell: bash
 
+      # --- NEW STEP: Generate Configuration JSON ---
+      - name: Generate Configuration JSON
+        run: |
+          echo "Generating build configuration at ${{ env.CONFIG_JSON_PATH }}"
+          # Using printf for safer handling of potential special characters in secrets
+          # Ensure proper JSON quoting (strings vs booleans)
+          printf '{\n' > "${{ env.CONFIG_JSON_PATH }}"
+          printf '  "bundle_id": "org.githubactions.telegram.temp",\n' >> "${{ env.CONFIG_JSON_PATH }}"
+          # Use the API keys from environment variables (secrets)
+          printf '  "api_id": "%s",\n' "${{ env.TELEGRAM_API_ID }}" >> "${{ env.CONFIG_JSON_PATH }}"
+          printf '  "api_hash": "%s",\n' "${{ env.TELEGRAM_API_HASH }}" >> "${{ env.CONFIG_JSON_PATH }}"
+          # Placeholder/default values for other fields suitable for unsigned build
+          printf '  "team_id": "",\n' >> "${{ env.CONFIG_JSON_PATH }}" # Blank Team ID for unsigned/no-provisioning build
+          printf '  "app_center_id": "0",\n' >> "${{ env.CONFIG_JSON_PATH }}"
+          printf '  "is_internal_build": "true",\n' >> "${{ env.CONFIG_JSON_PATH }}" # Mark as internal/CI build
+          printf '  "is_appstore_build": "false",\n' >> "${{ env.CONFIG_JSON_PATH }}" # Not an App Store build
+          printf '  "appstore_id": "0",\n' >> "${{ env.CONFIG_JSON_PATH }}"
+          printf '  "app_specific_url_scheme": "tg",\n' >> "${{ env.CONFIG_JSON_PATH }}"
+          printf '  "premium_iap_product_id": "",\n' >> "${{ env.CONFIG_JSON_PATH }}"
+          printf '  "enable_siri": false,\n' >> "${{ env.CONFIG_JSON_PATH }}" # JSON boolean false
+          printf '  "enable_icloud": false\n' >> "${{ env.CONFIG_JSON_PATH }}" # JSON boolean false - last line, no comma
+          printf '}\n' >> "${{ env.CONFIG_JSON_PATH }}"
+
+          echo "Configuration file content:"
+          cat "${{ env.CONFIG_JSON_PATH }}"
+        shell: bash
+
+
       # --- Main Build Step using Make.py ---
       - name: Build App using Make.py (Unsigned)
         run: |
@@ -81,20 +111,20 @@ jobs:
           echo "Starting Make.py build using ${MAKE_PY_SCRIPT_PATH}..."
 
           # Execute Make.py build command from repository root
-          # *** IMPORTANT: Verify the exact flag for disabling signing ***
-          # Common flags might be --disable-provisioning, --no-codesign, --skip-codesign
-          # Check `python3 ${MAKE_PY_SCRIPT_PATH} build --help` output or README carefully. Using '--disable-provisioning' as placeholder.
+          # Added --configurationPath pointing to the generated JSON file
+          # Using 'release_universal' for configuration based on previous error message
+          # *** IMPORTANT: Still verify the exact flag for disabling signing (--disable-provisioning is placeholder) ***
           python3 "${MAKE_PY_SCRIPT_PATH}" build \
-            --configuration=release_arm64 \
+            --configurationPath="${{ env.CONFIG_JSON_PATH }}" \ # <-- ADDED THIS ARGUMENT
+            --configuration=release_universal \
             --buildNumber=100001 \
-            --configurationPath=build-system/template_minimal_development_configuration.json \
             --build-path="${{ env.BUILD_OUTPUT_PATH }}" \
             --disable-provisioning # <-- VERIFY/REPLACE THIS FLAG NAME
-            # Add other necessary flags from README (e.g., --platform=ios, --arch=arm64, specific build number if required)
+            # Add other necessary flags from README (e.g., --platform=ios, specific build number if required)
 
           echo "Make.py build finished."
         shell: bash
-        # API Keys are passed via environment variables implicitly
+        # API Keys are passed via environment variables implicitly to the JSON generation step
 
       # --- Package IPA Step ---
       # Assumes Make.py created an unsigned .app bundle in BUILD_OUTPUT_PATH
@@ -142,4 +172,5 @@ jobs:
           echo "Cleaning up intermediate build directories..."
           rm -rf "${{ env.BUILD_OUTPUT_PATH }}" # Remove Make.py output dir
           rm -rf "${{ runner.temp }}/ipa_output" # Remove IPA packaging dir
+          rm -f "${{ env.CONFIG_JSON_PATH }}" # Remove generated config file
         shell: bash
