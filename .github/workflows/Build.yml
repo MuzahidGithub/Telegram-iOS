@@ -77,18 +77,18 @@ jobs:
           # Using printf for safer handling of potential special characters in secrets
           # Ensure proper JSON quoting (strings vs booleans)
           printf '{\n' > "${{ env.CONFIG_JSON_PATH }}"
-          printf '  "bundle_id": "org.githubactions.telegram.temp",\n' >> "${{ env.CONFIG_JSON_PATH }}"
+          printf '  "bundle_id": "org.githubactions.telegram",\n' >> "${{ env.CONFIG_JSON_PATH }}"
           # Use the API keys from environment variables (secrets)
           printf '  "api_id": "%s",\n' "${{ env.TELEGRAM_API_ID }}" >> "${{ env.CONFIG_JSON_PATH }}"
           printf '  "api_hash": "%s",\n' "${{ env.TELEGRAM_API_HASH }}" >> "${{ env.CONFIG_JSON_PATH }}"
           # Placeholder/default values for other fields suitable for unsigned build
-          printf '  "team_id": "",\n' >> "${{ env.CONFIG_JSON_PATH }}" # Blank Team ID for unsigned/no-provisioning build
-          printf '  "app_center_id": "0",\n' >> "${{ env.CONFIG_JSON_PATH }}"
+          printf '  "team_id": "C67CF9S4VU",\n' >> "${{ env.CONFIG_JSON_PATH }}" # Blank Team ID for unsigned/no-provisioning build
+          printf '  "app_center_id": "53355450",\n' >> "${{ env.CONFIG_JSON_PATH }}"
           printf '  "is_internal_build": "true",\n' >> "${{ env.CONFIG_JSON_PATH }}" # Mark as internal/CI build
           printf '  "is_appstore_build": "false",\n' >> "${{ env.CONFIG_JSON_PATH }}" # Not an App Store build
-          printf '  "appstore_id": "0",\n' >> "${{ env.CONFIG_JSON_PATH }}"
+          printf '  "appstore_id": "53355450",\n' >> "${{ env.CONFIG_JSON_PATH }}"
           printf '  "app_specific_url_scheme": "tg",\n' >> "${{ env.CONFIG_JSON_PATH }}"
-          printf '  "premium_iap_product_id": "",\n' >> "${{ env.CONFIG_JSON_PATH }}"
+          printf '  "premium_iap_product_id": "org.githubactions.telegram.monthly",\n' >> "${{ env.CONFIG_JSON_PATH }}"
           printf '  "enable_siri": false,\n' >> "${{ env.CONFIG_JSON_PATH }}" # JSON boolean false
           printf '  "enable_icloud": false\n' >> "${{ env.CONFIG_JSON_PATH }}" # JSON boolean false - last line, no comma
           printf '}\n' >> "${{ env.CONFIG_JSON_PATH }}"
