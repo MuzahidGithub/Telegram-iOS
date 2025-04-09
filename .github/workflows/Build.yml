@@ -22,8 +22,8 @@ jobs:
       DEBIAN_FRONTEND: noninteractive
       # Define output path for Make.py - Use workspace for absolute path clarity
       BUILD_OUTPUT_PATH: ${{ github.workspace }}/build_output
-      # Define path for the generated JSON config file
-      CONFIG_JSON_PATH: ${{ runner.temp }}/telegram_config.json
+      # Define path for the generated JSON config file - CORRECTED to use workspace
+      CONFIG_JSON_PATH: ${{ github.workspace }}/telegram_config.json # Use workspace instead of runner.temp
 
     steps:
       - name: Check for Secrets Availability
@@ -69,9 +69,10 @@ jobs:
           # Add any other setup steps mentioned in README (e.g., pip install) if required by Make.py
         shell: bash
 
-      # --- NEW STEP: Generate Configuration JSON ---
+      # --- Generate Configuration JSON ---
       - name: Generate Configuration JSON
         run: |
+          # Path now uses github.workspace as defined in env block
           echo "Generating build configuration at ${{ env.CONFIG_JSON_PATH }}"
           # Using printf for safer handling of potential special characters in secrets
           # Ensure proper JSON quoting (strings vs booleans)
@@ -111,11 +112,11 @@ jobs:
           echo "Starting Make.py build using ${MAKE_PY_SCRIPT_PATH}..."
 
           # Execute Make.py build command from repository root
-          # Added --configurationPath pointing to the generated JSON file
+          # Added --configurationPath pointing to the generated JSON file (path now uses workspace)
           # Using 'release_universal' for configuration based on previous error message
           # *** IMPORTANT: Still verify the exact flag for disabling signing (--disable-provisioning is placeholder) ***
           python3 "${MAKE_PY_SCRIPT_PATH}" build \
-            --configurationPath="${{ env.CONFIG_JSON_PATH }}" \ # <-- ADDED THIS ARGUMENT
+            --configurationPath="${{ env.CONFIG_JSON_PATH }}" \
             --configuration=release_arm64 \
             --buildNumber=100001 \
             --build-path="${{ env.BUILD_OUTPUT_PATH }}" \
@@ -134,6 +135,7 @@ jobs:
           # Verify the exact output .app name (likely Telegram.app)
           APP_NAME="Telegram.app"
           APP_PATH="${{ env.BUILD_OUTPUT_PATH }}/${APP_NAME}"
+          # Using runner.temp is fine here inside a 'run' block
           IPA_OUTPUT_DIR="${{ runner.temp }}/ipa_output"
           IPA_NAME="Telegram-unsigned.ipa"
           FINAL_IPA_PATH="${{ runner.temp }}/${IPA_NAME}" # Full path for artifact upload
@@ -163,7 +165,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Telegram-iOS-Unsigned-IPA
-          path: ${{ runner.temp }}/Telegram-unsigned.ipa # Upload the IPA from the runner temp dir
+          # Using runner.temp is fine here inside action inputs that support expressions
+          path: ${{ runner.temp }}/Telegram-unsigned.ipa
           if-no-files-found: error # Fail the step if IPA is missing
 
       - name: Clean up build directories (optional)
@@ -171,6 +174,8 @@ jobs:
         run: |
           echo "Cleaning up intermediate build directories..."
           rm -rf "${{ env.BUILD_OUTPUT_PATH }}" # Remove Make.py output dir
+          # Using runner.temp is fine here inside a 'run' block
           rm -rf "${{ runner.temp }}/ipa_output" # Remove IPA packaging dir
-          rm -f "${{ env.CONFIG_JSON_PATH }}" # Remove generated config file
+          # Remove generated config file (path now uses workspace)
+          rm -f "${{ env.CONFIG_JSON_PATH }}"
         shell: bash
