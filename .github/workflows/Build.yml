@@ -85,7 +85,7 @@ jobs:
           # Common flags might be --disable-provisioning, --no-codesign, --skip-codesign
           # Check `python3 ${MAKE_PY_SCRIPT_PATH} build --help` output or README carefully. Using '--disable-provisioning' as placeholder.
           python3 "${MAKE_PY_SCRIPT_PATH}" build \
-            --configuration=release \
+            --configuration=release_arm64 \
             --build-path="${{ env.BUILD_OUTPUT_PATH }}" \
             --disable-provisioning # <-- VERIFY/REPLACE THIS FLAG NAME
             # Add other necessary flags from README (e.g., --platform=ios, --arch=arm64, specific build number if required)
