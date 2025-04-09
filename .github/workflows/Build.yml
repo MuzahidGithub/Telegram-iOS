@@ -87,6 +87,7 @@ jobs:
           python3 "${MAKE_PY_SCRIPT_PATH}" build \
             --configuration=release_arm64 \
             --buildNumber=100001 \
+            --configurationPath=build-system/template_minimal_development_configuration.json \
             --build-path="${{ env.BUILD_OUTPUT_PATH }}" \
             --disable-provisioning # <-- VERIFY/REPLACE THIS FLAG NAME
             # Add other necessary flags from README (e.g., --platform=ios, --arch=arm64, specific build number if required)
