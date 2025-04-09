@@ -41,18 +41,38 @@ jobs:
           # repository: TelegramMessenger/Telegram-iOS
           submodules: 'recursive' # Important for fetching all dependencies
 
-      # Optional: Select specific Xcode version if needed (Check .xcode-version)
-      # - name: Select Xcode version
-      #   run: |
-      #     # ... (Xcode selection logic) ...
-      #   shell: bash
+       # --- Select Specific Xcode Version ---
+      - name: Select Xcode 16.2
+        run: |
+          # Path where specific Xcode versions are usually installed on GitHub runners
+          # Verify this path structure in GitHub Actions runner image documentation if needed
+          XCODE_PATH="/Applications/Xcode_16.2.app"
 
+          echo "Attempting to select Xcode at path: ${XCODE_PATH}"
+          if [[ -d "$XCODE_PATH" ]]; then
+            echo "Xcode path found. Selecting..."
+            sudo xcode-select -s "$XCODE_PATH/Contents/Developer"
+            echo "Xcode selected."
+          else
+            echo "Error: Xcode version 16.2 not found at expected path ${XCODE_PATH} on the runner."
+            echo "Available Xcode versions in /Applications/:"
+            ls -lA /Applications/ | grep Xcode || echo "No Xcode installations found matching pattern."
+            exit 1
+          fi
+        shell: bash
+
+      # --- Verify Selected Xcode Version and Other Tools ---
       - name: Check Tools Versions
         run: |
+          echo "Verifying Xcode version after selection:"
+          xcode-select -p
           xcodebuild -version
+          echo "Checking Python version:"
           python3 --version
           # bazel --version # Check bazel if prepare script doesn't guarantee it
         shell: bash
+
+     
 
       # Setup likely still involves Bazel preparation called by Make.py or needed beforehand
       - name: Set up Build Environment (Bazel, etc.)
