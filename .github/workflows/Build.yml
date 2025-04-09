@@ -13,7 +13,7 @@ jobs:
     name: Build Unsigned Telegram IPA
     # IMPORTANT: Telegram is a large project. Building may exceed free tier limits or time limits.
     # Consider using larger runners if available/needed.
-    # Check Telegram's .xcode-version file and choose a runner accordingly if needed (e.g., macos-13)
+    # Check Telegram's .xcode-version file and choose a runner accordingly if needed (e.g., macos-13, macos-14)
     runs-on: macos-latest # Use the latest available macOS runner
 
     # Define environment variables accessible by steps below
@@ -37,7 +37,8 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          repository: TelegramMessenger/Telegram-iOS # Checkout the official repo
+          # If running this in your fork, remove the 'repository:' line below
+          # repository: TelegramMessenger/Telegram-iOS
           submodules: 'recursive' # Important for fetching all dependencies
 
       # Optional: Select specific Xcode version if needed
@@ -46,6 +47,7 @@ jobs:
       #     if [ -f ".xcode-version" ]; then
       #       XCODE_VERSION=$(cat .xcode-version)
       #       echo "Selecting Xcode version specified in .xcode-version: $XCODE_VERSION"
+      #       # Adjust path based on available Xcode versions on runner
       #       sudo xcode-select -s /Applications/Xcode_${XCODE_VERSION}.app/Contents/Developer
       #     else
       #       echo "No .xcode-version file found, using default Xcode."
@@ -76,59 +78,118 @@ jobs:
           else
              echo "Warning: build-system/prepare-bazel.sh not found."
              echo "Attempting to install Bazel via Homebrew as fallback..."
+             # Installing might require sudo or different permissions depending on runner setup
              brew install bazel || echo "Failed to install Bazel via brew."
           fi
         shell: bash
+
+      # --- VERIFICATION STEP ---
+      # Check if the generation script exists and where before trying to run it
+      - name: Check for generate_xcodeproj script location
+        run: |
+          echo "Checking contents of ./build-system/ directory (and potentially others):"
+          ls -lA ./build-system/ || echo "Directory ./build-system/ not found or inaccessible."
+          # Add other directories if you suspect the script moved elsewhere, e.g. ls -lA ./scripts/
+          echo "-----------------------------------------------------"
+        shell: bash
+      # --- END VERIFICATION STEP ---
 
       # Telegram often requires generating an Xcode project from Bazel configuration
       # This step MOST LIKELY requires the API keys from the environment variables
       - name: Generate Xcode Project (if needed)
         run: |
-          if [ -f "build-system/generate_xcodeproj.sh" ]; then
-            echo "Running generate_xcodeproj.sh..."
+          # --- !!! ADJUST THIS PATH based on the output of the verification step above !!! ---
+          SCRIPT_PATH="./build-system/generate_xcodeproj.sh"
+
+          if [ -f "${SCRIPT_PATH}" ]; then
+            echo "Attempting to run script at: ${SCRIPT_PATH}..."
             # The script should pick up TELEGRAM_API_ID and TELEGRAM_API_HASH from the environment
-            ./build-system/generate_xcodeproj.sh # Adjust arguments if needed
+            "${SCRIPT_PATH}" # Adjust arguments if needed based on Telegram docs
+            echo "Script execution finished."
           else
-            echo "Warning: generate_xcodeproj.sh not found. Assuming direct Bazel/xcodebuild is possible or project exists."
+            # Use the actual path checked in the condition
+            echo "Warning: Script not found at expected location: ${SCRIPT_PATH}."
+            echo "Check the 'Check for generate_xcodeproj script location' step output and Telegram docs."
+            echo "Proceeding assuming direct Bazel/xcodebuild is possible or project exists elsewhere..."
+            # Optionally exit here if the script is mandatory:
+            # exit 1
           fi
         shell: bash
         # Environment variables TELEGRAM_API_ID and TELEGRAM_API_HASH are implicitly passed here
 
-      # Identify the correct project/workspace and scheme. This might require inspection.
-      # Common locations after generation might be 'build-input/gen/...' or the root.
-      # Common schemes are 'Telegram'. Adjust PROJECT_PATH and SCHEME as needed.
+
+      # --- DEBUGGING STEP ---
+      # List files AFTER the generation attempt to see the result
+      - name: List generated files and search for Project/Workspace
+        run: |
+          echo "Listing current directory structure (limited depth):"
+          ls -lA
+          # Optionally list more depth if needed, but can be very verbose:
+          # ls -R | head -n 200 # Show first 200 lines of recursive list
+
+          echo "-----------------------------------------------------"
+          echo "Searching for .xcodeproj and .xcworkspace files..."
+          find . -name "*.xcodeproj" -print
+          find . -name "*.xcworkspace" -print
+          echo "-----------------------------------------------------"
+        shell: bash
+      # --- END DEBUGGING STEP ---
+
+
+      # Identify the correct project/workspace and scheme.
       - name: Build and Archive (Unsigned)
         run: |
           set -eo pipefail # Exit on error, treat pipeline errors as errors
 
-          # --- Configuration - Adjust these if necessary ---
-          # Try to find the generated project, fallback to a common name
-          GENERATED_PROJECT=$(find . -name "Telegram.xcodeproj" -maxdepth 3 -print -quit) # Search a few levels deep
-          PROJECT_PATH="${GENERATED_PROJECT:-Telegram.xcodeproj}" # Use found path or default guess
-          SCHEME="Telegram" # Common scheme name
+          # --- Configuration ---
+          # Attempt to find workspace first, then project
+          # Adjust find parameters (-maxdepth, starting path '.') if DEBUG step shows it elsewhere
+          echo "Searching for workspace/project files..."
+          GENERATED_WORKSPACE=$(find . -name "Telegram.xcworkspace" -maxdepth 3 -print -quit)
+          GENERATED_PROJECT=$(find . -name "Telegram.xcodeproj" -maxdepth 3 -print -quit)
+
+          BUILD_TARGET_ARG=""
+          PROJECT_OR_WORKSPACE_PATH=""
+
+          if [ -n "$GENERATED_WORKSPACE" ]; then
+            PROJECT_OR_WORKSPACE_PATH="$GENERATED_WORKSPACE"
+            BUILD_TARGET_ARG="-workspace \"${PROJECT_OR_WORKSPACE_PATH}\""
+            echo "Using Workspace Path: ${PROJECT_OR_WORKSPACE_PATH}"
+          elif [ -n "$GENERATED_PROJECT" ]; then
+            PROJECT_OR_WORKSPACE_PATH="$GENERATED_PROJECT"
+            BUILD_TARGET_ARG="-project \"${PROJECT_OR_WORKSPACE_PATH}\""
+            echo "Using Project Path: ${PROJECT_OR_WORKSPACE_PATH}"
+          else
+            # If neither found automatically, report error
+            echo "Error: Neither Telegram.xcworkspace nor Telegram.xcodeproj found automatically by 'find' command."
+            echo "Check the output of the 'List generated files' step."
+            echo "Ensure the 'Generate Xcode Project' step ran correctly or check Telegram docs for build process."
+            exit 1
+          fi
+
+          SCHEME="Telegram" # Common scheme name - VERIFY THIS in the actual project/workspace if possible
           CONFIGURATION="Release"
-          BUILD_DIR="build" # Temporary build directory
+          BUILD_DIR="${RUNNER_TEMP}/build" # Use runner temp dir for intermediate build files
           ARCHIVE_PATH="${BUILD_DIR}/Archive.xcarchive"
-          IPA_OUTPUT_DIR="ipa_output"
-          IPA_NAME="Telegram-unsigned.ipa"
+          IPA_OUTPUT_DIR="${RUNNER_TEMP}/ipa_output"
+          IPA_NAME="Telegram-unsigned.ipa" # Final artifact name
+          FINAL_IPA_PATH="${RUNNER_TEMP}/${IPA_NAME}" # Full path for artifact upload
           # --- End Configuration ---
 
-          echo "Using Project Path: ${PROJECT_PATH}"
-          echo "Using Scheme: ${SCHEME}"
-          echo "Using Configuration: ${CONFIGURATION}"
-
-          if [ ! -e "${PROJECT_PATH}" ]; then
-            echo "Error: Xcode project/workspace not found at expected location: ${PROJECT_PATH}"
-            echo "Check the output of the 'Generate Xcode Project' step or the repository structure."
+          # Check if the determined path actually exists before building
+          # Need to use eval to handle potential spaces in path within the check
+          if ! eval [ -e "\"${PROJECT_OR_WORKSPACE_PATH}\"" ]; then
+            echo "Error: Xcode project/workspace not found at determined path: ${PROJECT_OR_WORKSPACE_PATH}"
+            echo "This should not happen if the 'find' command succeeded. Check file system state."
             exit 1
           fi
 
           # Build and create the archive (.xcarchive) without signing
-          # CODE_SIGN_IDENTITY="", CODE_SIGNING_REQUIRED=NO, CODE_SIGNING_ALLOWED=NO prevent signing
-          # The API keys should have been embedded during project generation or earlier setup.
-          echo "Building archive..."
+          echo "Building archive (Scheme: ${SCHEME}, Config: ${CONFIGURATION})..."
+          # Use the determined $BUILD_TARGET_ARG which includes -project or -workspace
+          # Use xcpretty for cleaner logs if available, otherwise pipe to cat
           xcodebuild archive \
-            -project "${PROJECT_PATH}" \
+            ${BUILD_TARGET_ARG} \
             -scheme "${SCHEME}" \
             -configuration "${CONFIGURATION}" \
             -destination "generic/platform=iOS" \
@@ -136,20 +197,17 @@ jobs:
             "CODE_SIGN_IDENTITY=" \
             "CODE_SIGNING_REQUIRED=NO" \
             "CODE_SIGNING_ALLOWED=NO" \
-            | xcpretty # Optional: Makes output cleaner, remove if causing issues or not installed
+            | xcpretty || cat
 
           # Create the unsigned IPA from the archive
-          echo "Creating unsigned IPA..."
+          echo "Creating unsigned IPA from archive..."
           mkdir -p "${IPA_OUTPUT_DIR}" # Create output directory for the IPA
 
-          # Export the archive to create the IPA structure, ignoring signing requirements
-          # Using -exportOptionsPlist with minimal options might be an alternative,
-          # but directly packaging the .app is often simpler for unsigned builds.
           APP_PATH_IN_ARCHIVE="${ARCHIVE_PATH}/Products/Applications/${SCHEME}.app" # Path to the .app inside the archive
 
           if [ ! -d "${APP_PATH_IN_ARCHIVE}" ]; then
              echo "Error: .app bundle not found at expected location: ${APP_PATH_IN_ARCHIVE}"
-             echo "Check the archive contents or build logs."
+             echo "Check the archive contents or build logs. The scheme name might be incorrect."
              exit 1
           fi
 
@@ -160,9 +218,9 @@ jobs:
 
           # Zip the Payload directory to create the final IPA
           echo "Zipping IPA..."
-          (cd "${IPA_OUTPUT_DIR}" && zip -r "../${IPA_NAME}" Payload)
+          (cd "${IPA_OUTPUT_DIR}" && zip -qr "../${IPA_NAME}" Payload)
 
-          echo "Unsigned IPA created at ${IPA_NAME}"
+          echo "Unsigned IPA created at ${FINAL_IPA_PATH}"
 
         shell: bash
         # Environment variables TELEGRAM_API_ID and TELEGRAM_API_HASH are implicitly passed here
@@ -171,8 +229,13 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Telegram-iOS-Unsigned-IPA
-          path: Telegram-unsigned.ipa # The final IPA file generated in the previous step
+          path: ${{ runner.temp }}/Telegram-unsigned.ipa # Upload the IPA from the runner temp dir
+          if-no-files-found: error # Fail the step if IPA is missing
 
-      - name: Clean up build directory (optional)
+      - name: Clean up build directories (optional)
         if: always() # Run even if previous steps fail
-        run: rm -rf build ipa_output # Remove large intermediate directories
+        run: |
+          echo "Cleaning up intermediate build directories..."
+          rm -rf "${{ runner.temp }}/build"
+          rm -rf "${{ runner.temp }}/ipa_output"
+        shell: bash
