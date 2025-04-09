@@ -116,7 +116,7 @@ jobs:
           # *** IMPORTANT: Still verify the exact flag for disabling signing (--disable-provisioning is placeholder) ***
           python3 "${MAKE_PY_SCRIPT_PATH}" build \
             --configurationPath="${{ env.CONFIG_JSON_PATH }}" \ # <-- ADDED THIS ARGUMENT
-            --configuration=release_universal \
+            --configuration=release_arm64 \
             --buildNumber=100001 \
             --build-path="${{ env.BUILD_OUTPUT_PATH }}" \
             --disable-provisioning # <-- VERIFY/REPLACE THIS FLAG NAME
