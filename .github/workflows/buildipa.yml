@@ -99,7 +99,7 @@ jobs:
           mv Telegram-unsigned.ipa build/outputs/
 
       - name: Upload unsigned IPA
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: Telegram-unsigned
           path: build/outputs/Telegram-unsigned.ipa
