@@ -6,14 +6,11 @@ on:
   workflow_dispatch: # Allows manual triggering
   # push: # Uncomment and adjust if you want it to run on pushes
   #   branches:
-  #     - develop # Or whichever branch Telegram uses as main development branch
+  #     - master # Or whichever branch Telegram uses as main development branch
 
 jobs:
   build:
     name: Build Unsigned Telegram IPA
-    # IMPORTANT: Telegram is a large project. Building may exceed free tier limits or time limits.
-    # Consider using larger runners if available/needed.
-    # Check Telegram's .xcode-version file and choose a runner accordingly if needed (e.g., macos-13, macos-14)
     runs-on: macos-latest # Use the latest available macOS runner
 
     # Define environment variables accessible by steps below
@@ -23,10 +20,11 @@ jobs:
       TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
       # Force non-interactive mode for scripts if needed (sometimes helps in CI)
       DEBIAN_FRONTEND: noninteractive
+      # Define output path for Make.py - Use workspace for absolute path clarity
+      BUILD_OUTPUT_PATH: ${{ github.workspace }}/build_output
 
     steps:
       - name: Check for Secrets Availability
-        # Fail fast if secrets aren't configured
         if: env.TELEGRAM_API_ID == '' || env.TELEGRAM_API_HASH == ''
         run: |
           echo "Error: TELEGRAM_API_ID or TELEGRAM_API_HASH secrets are not set."
@@ -41,189 +39,93 @@ jobs:
           # repository: TelegramMessenger/Telegram-iOS
           submodules: 'recursive' # Important for fetching all dependencies
 
-      # Optional: Select specific Xcode version if needed
-      # - name: Select Xcode version (if required by Telegram)
+      # Optional: Select specific Xcode version if needed (Check .xcode-version)
+      # - name: Select Xcode version
       #   run: |
-      #     if [ -f ".xcode-version" ]; then
-      #       XCODE_VERSION=$(cat .xcode-version)
-      #       echo "Selecting Xcode version specified in .xcode-version: $XCODE_VERSION"
-      #       # Adjust path based on available Xcode versions on runner
-      #       sudo xcode-select -s /Applications/Xcode_${XCODE_VERSION}.app/Contents/Developer
-      #     else
-      #       echo "No .xcode-version file found, using default Xcode."
-      #     fi
+      #     # ... (Xcode selection logic) ...
       #   shell: bash
 
-      - name: Check Xcode Version
-        run: xcodebuild -version
-
-      # Telegram uses specific versions of build tools (like Bazel) and has setup scripts.
-      # These script names/locations might change in the Telegram repo. Double-check them.
-      - name: Set up Build Environment (Depot Tools, Bazel, etc.)
-        # The API keys might be needed by these scripts indirectly via Bazel setup
+      - name: Check Tools Versions
         run: |
-          # These scripts likely download and configure necessary build tools like Bazel
-          # Check the current Telegram repo for the correct setup scripts.
-          # This might take a significant amount of time.
-          if [ -f "build-system/build-depot-tools.sh" ]; then
-            echo "Running build-depot-tools.sh..."
-            ./build-system/build-depot-tools.sh
-          else
-            echo "Warning: build-system/build-depot-tools.sh not found."
-          fi
+          xcodebuild -version
+          python3 --version
+          # bazel --version # Check bazel if prepare script doesn't guarantee it
+        shell: bash
 
+      # Setup likely still involves Bazel preparation called by Make.py or needed beforehand
+      - name: Set up Build Environment (Bazel, etc.)
+        run: |
+          # Run preparation scripts mentioned in README, likely still needed by Make.py
+          # Adjust paths/scripts based on current README/repo structure
           if [ -f "build-system/prepare-bazel.sh" ]; then
              echo "Running prepare-bazel.sh..."
             ./build-system/prepare-bazel.sh
           else
              echo "Warning: build-system/prepare-bazel.sh not found."
-             echo "Attempting to install Bazel via Homebrew as fallback..."
-             # Installing might require sudo or different permissions depending on runner setup
-             brew install bazel || echo "Failed to install Bazel via brew."
+             # Consider installing bazel via brew if script is missing and needed
           fi
+          # Add any other setup steps mentioned in README (e.g., pip install) if required by Make.py
         shell: bash
 
-      # --- VERIFICATION STEP ---
-      # Check if the generation script exists and where before trying to run it
-      - name: Check for generate_xcodeproj script location
+      # --- Main Build Step using Make.py ---
+      - name: Build App using Make.py (Unsigned)
         run: |
-          echo "Checking contents of ./build-system/ directory (and potentially others):"
-          ls -lA ./build-system/ || echo "Directory ./build-system/ not found or inaccessible."
-          # Add other directories if you suspect the script moved elsewhere, e.g. ls -lA ./scripts/
-          echo "-----------------------------------------------------"
-        shell: bash
-      # --- END VERIFICATION STEP ---
+          # Using corrected path to Make.py
+          MAKE_PY_SCRIPT_PATH="build-system/Make/Make.py"
 
-      # Telegram often requires generating an Xcode project from Bazel configuration
-      # This step MOST LIKELY requires the API keys from the environment variables
-      - name: Generate Xcode Project (if needed)
-        run: |
-          # --- !!! ADJUST THIS PATH based on the output of the verification step above !!! ---
-          SCRIPT_PATH="./build-system/generate_xcodeproj.sh"
-
-          if [ -f "${SCRIPT_PATH}" ]; then
-            echo "Attempting to run script at: ${SCRIPT_PATH}..."
-            # The script should pick up TELEGRAM_API_ID and TELEGRAM_API_HASH from the environment
-            "${SCRIPT_PATH}" # Adjust arguments if needed based on Telegram docs
-            echo "Script execution finished."
-          else
-            # Use the actual path checked in the condition
-            echo "Warning: Script not found at expected location: ${SCRIPT_PATH}."
-            echo "Check the 'Check for generate_xcodeproj script location' step output and Telegram docs."
-            echo "Proceeding assuming direct Bazel/xcodebuild is possible or project exists elsewhere..."
-            # Optionally exit here if the script is mandatory:
-            # exit 1
-          fi
-        shell: bash
-        # Environment variables TELEGRAM_API_ID and TELEGRAM_API_HASH are implicitly passed here
-
-
-      # --- DEBUGGING STEP ---
-      # List files AFTER the generation attempt to see the result
-      - name: List generated files and search for Project/Workspace
-        run: |
-          echo "Listing current directory structure (limited depth):"
-          ls -lA
-          # Optionally list more depth if needed, but can be very verbose:
-          # ls -R | head -n 200 # Show first 200 lines of recursive list
-
-          echo "-----------------------------------------------------"
-          echo "Searching for .xcodeproj and .xcworkspace files..."
-          find . -name "*.xcodeproj" -print
-          find . -name "*.xcworkspace" -print
-          echo "-----------------------------------------------------"
-        shell: bash
-      # --- END DEBUGGING STEP ---
-
-
-      # Identify the correct project/workspace and scheme.
-      - name: Build and Archive (Unsigned)
-        run: |
-          set -eo pipefail # Exit on error, treat pipeline errors as errors
-
-          # --- Configuration ---
-          # Attempt to find workspace first, then project
-          # Adjust find parameters (-maxdepth, starting path '.') if DEBUG step shows it elsewhere
-          echo "Searching for workspace/project files..."
-          GENERATED_WORKSPACE=$(find . -name "Telegram.xcworkspace" -maxdepth 3 -print -quit)
-          GENERATED_PROJECT=$(find . -name "Telegram.xcodeproj" -maxdepth 3 -print -quit)
-
-          BUILD_TARGET_ARG=""
-          PROJECT_OR_WORKSPACE_PATH=""
-
-          if [ -n "$GENERATED_WORKSPACE" ]; then
-            PROJECT_OR_WORKSPACE_PATH="$GENERATED_WORKSPACE"
-            BUILD_TARGET_ARG="-workspace \"${PROJECT_OR_WORKSPACE_PATH}\""
-            echo "Using Workspace Path: ${PROJECT_OR_WORKSPACE_PATH}"
-          elif [ -n "$GENERATED_PROJECT" ]; then
-            PROJECT_OR_WORKSPACE_PATH="$GENERATED_PROJECT"
-            BUILD_TARGET_ARG="-project \"${PROJECT_OR_WORKSPACE_PATH}\""
-            echo "Using Project Path: ${PROJECT_OR_WORKSPACE_PATH}"
-          else
-            # If neither found automatically, report error
-            echo "Error: Neither Telegram.xcworkspace nor Telegram.xcodeproj found automatically by 'find' command."
-            echo "Check the output of the 'List generated files' step."
-            echo "Ensure the 'Generate Xcode Project' step ran correctly or check Telegram docs for build process."
+          if [ ! -f "${MAKE_PY_SCRIPT_PATH}" ]; then
+            echo "Error: Build script not found at expected location: ${MAKE_PY_SCRIPT_PATH}"
             exit 1
           fi
 
-          SCHEME="Telegram" # Common scheme name - VERIFY THIS in the actual project/workspace if possible
-          CONFIGURATION="Release"
-          BUILD_DIR="${RUNNER_TEMP}/build" # Use runner temp dir for intermediate build files
-          ARCHIVE_PATH="${BUILD_DIR}/Archive.xcarchive"
-          IPA_OUTPUT_DIR="${RUNNER_TEMP}/ipa_output"
-          IPA_NAME="Telegram-unsigned.ipa" # Final artifact name
-          FINAL_IPA_PATH="${RUNNER_TEMP}/${IPA_NAME}" # Full path for artifact upload
-          # --- End Configuration ---
+          echo "Starting Make.py build using ${MAKE_PY_SCRIPT_PATH}..."
 
-          # Check if the determined path actually exists before building
-          # Need to use eval to handle potential spaces in path within the check
-          if ! eval [ -e "\"${PROJECT_OR_WORKSPACE_PATH}\"" ]; then
-            echo "Error: Xcode project/workspace not found at determined path: ${PROJECT_OR_WORKSPACE_PATH}"
-            echo "This should not happen if the 'find' command succeeded. Check file system state."
-            exit 1
-          fi
+          # Execute Make.py build command from repository root
+          # *** IMPORTANT: Verify the exact flag for disabling signing ***
+          # Common flags might be --disable-provisioning, --no-codesign, --skip-codesign
+          # Check `python3 ${MAKE_PY_SCRIPT_PATH} build --help` output or README carefully. Using '--disable-provisioning' as placeholder.
+          python3 "${MAKE_PY_SCRIPT_PATH}" build \
+            --configuration=release \
+            --build-path="${{ env.BUILD_OUTPUT_PATH }}" \
+            --disable-provisioning # <-- VERIFY/REPLACE THIS FLAG NAME
+            # Add other necessary flags from README (e.g., --platform=ios, --arch=arm64, specific build number if required)
 
-          # Build and create the archive (.xcarchive) without signing
-          echo "Building archive (Scheme: ${SCHEME}, Config: ${CONFIGURATION})..."
-          # Use the determined $BUILD_TARGET_ARG which includes -project or -workspace
-          # Use xcpretty for cleaner logs if available, otherwise pipe to cat
-          xcodebuild archive \
-            ${BUILD_TARGET_ARG} \
-            -scheme "${SCHEME}" \
-            -configuration "${CONFIGURATION}" \
-            -destination "generic/platform=iOS" \
-            -archivePath "${ARCHIVE_PATH}" \
-            "CODE_SIGN_IDENTITY=" \
-            "CODE_SIGNING_REQUIRED=NO" \
-            "CODE_SIGNING_ALLOWED=NO" \
-            | xcpretty || cat
+          echo "Make.py build finished."
+        shell: bash
+        # API Keys are passed via environment variables implicitly
 
-          # Create the unsigned IPA from the archive
-          echo "Creating unsigned IPA from archive..."
-          mkdir -p "${IPA_OUTPUT_DIR}" # Create output directory for the IPA
+      # --- Package IPA Step ---
+      # Assumes Make.py created an unsigned .app bundle in BUILD_OUTPUT_PATH
+      - name: Package Unsigned IPA
+        run: |
+          echo "Packaging IPA..."
+          # Verify the exact output .app name (likely Telegram.app)
+          APP_NAME="Telegram.app"
+          APP_PATH="${{ env.BUILD_OUTPUT_PATH }}/${APP_NAME}"
+          IPA_OUTPUT_DIR="${{ runner.temp }}/ipa_output"
+          IPA_NAME="Telegram-unsigned.ipa"
+          FINAL_IPA_PATH="${{ runner.temp }}/${IPA_NAME}" # Full path for artifact upload
 
-          APP_PATH_IN_ARCHIVE="${ARCHIVE_PATH}/Products/Applications/${SCHEME}.app" # Path to the .app inside the archive
-
-          if [ ! -d "${APP_PATH_IN_ARCHIVE}" ]; then
-             echo "Error: .app bundle not found at expected location: ${APP_PATH_IN_ARCHIVE}"
-             echo "Check the archive contents or build logs. The scheme name might be incorrect."
+          if [ ! -d "${APP_PATH}" ]; then
+             echo "Error: .app bundle not found at expected Make.py output location: ${APP_PATH}"
+             echo "Check the output of the 'Build App using Make.py' step or the script's arguments."
+             echo "Listing contents of build output path:"
+             ls -lA "${{ env.BUILD_OUTPUT_PATH }}"
              exit 1
           fi
 
           # Create the Payload directory and copy the .app into it
           PAYLOAD_DIR="${IPA_OUTPUT_DIR}/Payload"
           mkdir -p "${PAYLOAD_DIR}"
-          cp -R "${APP_PATH_IN_ARCHIVE}" "${PAYLOAD_DIR}/"
+          echo "Copying ${APP_PATH} to ${PAYLOAD_DIR}/"
+          cp -R "${APP_PATH}" "${PAYLOAD_DIR}/"
 
           # Zip the Payload directory to create the final IPA
           echo "Zipping IPA..."
           (cd "${IPA_OUTPUT_DIR}" && zip -qr "../${IPA_NAME}" Payload)
 
           echo "Unsigned IPA created at ${FINAL_IPA_PATH}"
-
         shell: bash
-        # Environment variables TELEGRAM_API_ID and TELEGRAM_API_HASH are implicitly passed here
 
       - name: Upload Unsigned IPA Artifact
         uses: actions/upload-artifact@v4
@@ -236,6 +138,6 @@ jobs:
         if: always() # Run even if previous steps fail
         run: |
           echo "Cleaning up intermediate build directories..."
-          rm -rf "${{ runner.temp }}/build"
-          rm -rf "${{ runner.temp }}/ipa_output"
+          rm -rf "${{ env.BUILD_OUTPUT_PATH }}" # Remove Make.py output dir
+          rm -rf "${{ runner.temp }}/ipa_output" # Remove IPA packaging dir
         shell: bash
