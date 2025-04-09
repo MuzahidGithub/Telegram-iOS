@@ -1,1 +1,178 @@
+# .github/workflows/build-telegram-ios.yml
 
+name: Build Telegram iOS (Unsigned)
+
+on:
+  workflow_dispatch: # Allows manual triggering
+  # push: # Uncomment and adjust if you want it to run on pushes
+  #   branches:
+  #     - develop # Or whichever branch Telegram uses as main development branch
+
+jobs:
+  build:
+    name: Build Unsigned Telegram IPA
+    # IMPORTANT: Telegram is a large project. Building may exceed free tier limits or time limits.
+    # Consider using larger runners if available/needed.
+    # Check Telegram's .xcode-version file and choose a runner accordingly if needed (e.g., macos-13)
+    runs-on: macos-latest # Use the latest available macOS runner
+
+    # Define environment variables accessible by steps below
+    # These secrets MUST be configured in your repository's Settings > Secrets and variables > Actions
+    env:
+      TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+      TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+      # Force non-interactive mode for scripts if needed (sometimes helps in CI)
+      DEBIAN_FRONTEND: noninteractive
+
+    steps:
+      - name: Check for Secrets Availability
+        # Fail fast if secrets aren't configured
+        if: env.TELEGRAM_API_ID == '' || env.TELEGRAM_API_HASH == ''
+        run: |
+          echo "Error: TELEGRAM_API_ID or TELEGRAM_API_HASH secrets are not set."
+          echo "Please configure them in your repository's Settings > Secrets and variables > Actions."
+          exit 1
+        shell: bash
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          repository: TelegramMessenger/Telegram-iOS # Checkout the official repo
+          submodules: 'recursive' # Important for fetching all dependencies
+
+      # Optional: Select specific Xcode version if needed
+      # - name: Select Xcode version (if required by Telegram)
+      #   run: |
+      #     if [ -f ".xcode-version" ]; then
+      #       XCODE_VERSION=$(cat .xcode-version)
+      #       echo "Selecting Xcode version specified in .xcode-version: $XCODE_VERSION"
+      #       sudo xcode-select -s /Applications/Xcode_${XCODE_VERSION}.app/Contents/Developer
+      #     else
+      #       echo "No .xcode-version file found, using default Xcode."
+      #     fi
+      #   shell: bash
+
+      - name: Check Xcode Version
+        run: xcodebuild -version
+
+      # Telegram uses specific versions of build tools (like Bazel) and has setup scripts.
+      # These script names/locations might change in the Telegram repo. Double-check them.
+      - name: Set up Build Environment (Depot Tools, Bazel, etc.)
+        # The API keys might be needed by these scripts indirectly via Bazel setup
+        run: |
+          # These scripts likely download and configure necessary build tools like Bazel
+          # Check the current Telegram repo for the correct setup scripts.
+          # This might take a significant amount of time.
+          if [ -f "build-system/build-depot-tools.sh" ]; then
+            echo "Running build-depot-tools.sh..."
+            ./build-system/build-depot-tools.sh
+          else
+            echo "Warning: build-system/build-depot-tools.sh not found."
+          fi
+
+          if [ -f "build-system/prepare-bazel.sh" ]; then
+             echo "Running prepare-bazel.sh..."
+            ./build-system/prepare-bazel.sh
+          else
+             echo "Warning: build-system/prepare-bazel.sh not found."
+             echo "Attempting to install Bazel via Homebrew as fallback..."
+             brew install bazel || echo "Failed to install Bazel via brew."
+          fi
+        shell: bash
+
+      # Telegram often requires generating an Xcode project from Bazel configuration
+      # This step MOST LIKELY requires the API keys from the environment variables
+      - name: Generate Xcode Project (if needed)
+        run: |
+          if [ -f "build-system/generate_xcodeproj.sh" ]; then
+            echo "Running generate_xcodeproj.sh..."
+            # The script should pick up TELEGRAM_API_ID and TELEGRAM_API_HASH from the environment
+            ./build-system/generate_xcodeproj.sh # Adjust arguments if needed
+          else
+            echo "Warning: generate_xcodeproj.sh not found. Assuming direct Bazel/xcodebuild is possible or project exists."
+          fi
+        shell: bash
+        # Environment variables TELEGRAM_API_ID and TELEGRAM_API_HASH are implicitly passed here
+
+      # Identify the correct project/workspace and scheme. This might require inspection.
+      # Common locations after generation might be 'build-input/gen/...' or the root.
+      # Common schemes are 'Telegram'. Adjust PROJECT_PATH and SCHEME as needed.
+      - name: Build and Archive (Unsigned)
+        run: |
+          set -eo pipefail # Exit on error, treat pipeline errors as errors
+
+          # --- Configuration - Adjust these if necessary ---
+          # Try to find the generated project, fallback to a common name
+          GENERATED_PROJECT=$(find . -name "Telegram.xcodeproj" -maxdepth 3 -print -quit) # Search a few levels deep
+          PROJECT_PATH="${GENERATED_PROJECT:-Telegram.xcodeproj}" # Use found path or default guess
+          SCHEME="Telegram" # Common scheme name
+          CONFIGURATION="Release"
+          BUILD_DIR="build" # Temporary build directory
+          ARCHIVE_PATH="${BUILD_DIR}/Archive.xcarchive"
+          IPA_OUTPUT_DIR="ipa_output"
+          IPA_NAME="Telegram-unsigned.ipa"
+          # --- End Configuration ---
+
+          echo "Using Project Path: ${PROJECT_PATH}"
+          echo "Using Scheme: ${SCHEME}"
+          echo "Using Configuration: ${CONFIGURATION}"
+
+          if [ ! -e "${PROJECT_PATH}" ]; then
+            echo "Error: Xcode project/workspace not found at expected location: ${PROJECT_PATH}"
+            echo "Check the output of the 'Generate Xcode Project' step or the repository structure."
+            exit 1
+          fi
+
+          # Build and create the archive (.xcarchive) without signing
+          # CODE_SIGN_IDENTITY="", CODE_SIGNING_REQUIRED=NO, CODE_SIGNING_ALLOWED=NO prevent signing
+          # The API keys should have been embedded during project generation or earlier setup.
+          echo "Building archive..."
+          xcodebuild archive \
+            -project "${PROJECT_PATH}" \
+            -scheme "${SCHEME}" \
+            -configuration "${CONFIGURATION}" \
+            -destination "generic/platform=iOS" \
+            -archivePath "${ARCHIVE_PATH}" \
+            "CODE_SIGN_IDENTITY=" \
+            "CODE_SIGNING_REQUIRED=NO" \
+            "CODE_SIGNING_ALLOWED=NO" \
+            | xcpretty # Optional: Makes output cleaner, remove if causing issues or not installed
+
+          # Create the unsigned IPA from the archive
+          echo "Creating unsigned IPA..."
+          mkdir -p "${IPA_OUTPUT_DIR}" # Create output directory for the IPA
+
+          # Export the archive to create the IPA structure, ignoring signing requirements
+          # Using -exportOptionsPlist with minimal options might be an alternative,
+          # but directly packaging the .app is often simpler for unsigned builds.
+          APP_PATH_IN_ARCHIVE="${ARCHIVE_PATH}/Products/Applications/${SCHEME}.app" # Path to the .app inside the archive
+
+          if [ ! -d "${APP_PATH_IN_ARCHIVE}" ]; then
+             echo "Error: .app bundle not found at expected location: ${APP_PATH_IN_ARCHIVE}"
+             echo "Check the archive contents or build logs."
+             exit 1
+          fi
+
+          # Create the Payload directory and copy the .app into it
+          PAYLOAD_DIR="${IPA_OUTPUT_DIR}/Payload"
+          mkdir -p "${PAYLOAD_DIR}"
+          cp -R "${APP_PATH_IN_ARCHIVE}" "${PAYLOAD_DIR}/"
+
+          # Zip the Payload directory to create the final IPA
+          echo "Zipping IPA..."
+          (cd "${IPA_OUTPUT_DIR}" && zip -r "../${IPA_NAME}" Payload)
+
+          echo "Unsigned IPA created at ${IPA_NAME}"
+
+        shell: bash
+        # Environment variables TELEGRAM_API_ID and TELEGRAM_API_HASH are implicitly passed here
+
+      - name: Upload Unsigned IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Telegram-iOS-Unsigned-IPA
+          path: Telegram-unsigned.ipa # The final IPA file generated in the previous step
+
+      - name: Clean up build directory (optional)
+        if: always() # Run even if previous steps fail
+        run: rm -rf build ipa_output # Remove large intermediate directories
