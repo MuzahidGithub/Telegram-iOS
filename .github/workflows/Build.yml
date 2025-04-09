@@ -77,18 +77,18 @@ jobs:
           # Using printf for safer handling of potential special characters in secrets
           # Ensure proper JSON quoting (strings vs booleans)
           printf '{\n' > "${{ env.CONFIG_JSON_PATH }}"
-          printf '  "bundle_id": "org.githubactions.telegram",\n' >> "${{ env.CONFIG_JSON_PATH }}"
+          printf '  "bundle_id": "org.githubactions.telegram.temp",\n' >> "${{ env.CONFIG_JSON_PATH }}"
           # Use the API keys from environment variables (secrets)
           printf '  "api_id": "%s",\n' "${{ env.TELEGRAM_API_ID }}" >> "${{ env.CONFIG_JSON_PATH }}"
           printf '  "api_hash": "%s",\n' "${{ env.TELEGRAM_API_HASH }}" >> "${{ env.CONFIG_JSON_PATH }}"
           # Placeholder/default values for other fields suitable for unsigned build
-          printf '  "team_id": "C67CF9S4VU",\n' >> "${{ env.CONFIG_JSON_PATH }}" # Blank Team ID for unsigned/no-provisioning build
-          printf '  "app_center_id": "53355450",\n' >> "${{ env.CONFIG_JSON_PATH }}"
+          printf '  "team_id": "",\n' >> "${{ env.CONFIG_JSON_PATH }}" # Blank Team ID should signal unsigned build
+          printf '  "app_center_id": "0",\n' >> "${{ env.CONFIG_JSON_PATH }}"
           printf '  "is_internal_build": "true",\n' >> "${{ env.CONFIG_JSON_PATH }}" # Mark as internal/CI build
           printf '  "is_appstore_build": "false",\n' >> "${{ env.CONFIG_JSON_PATH }}" # Not an App Store build
-          printf '  "appstore_id": "53355450",\n' >> "${{ env.CONFIG_JSON_PATH }}"
+          printf '  "appstore_id": "0",\n' >> "${{ env.CONFIG_JSON_PATH }}"
           printf '  "app_specific_url_scheme": "tg",\n' >> "${{ env.CONFIG_JSON_PATH }}"
-          printf '  "premium_iap_product_id": "org.githubactions.telegram.monthly",\n' >> "${{ env.CONFIG_JSON_PATH }}"
+          printf '  "premium_iap_product_id": "",\n' >> "${{ env.CONFIG_JSON_PATH }}"
           printf '  "enable_siri": false,\n' >> "${{ env.CONFIG_JSON_PATH }}" # JSON boolean false
           printf '  "enable_icloud": false\n' >> "${{ env.CONFIG_JSON_PATH }}" # JSON boolean false - last line, no comma
           printf '}\n' >> "${{ env.CONFIG_JSON_PATH }}"
@@ -111,18 +111,11 @@ jobs:
 
           echo "Starting Make.py build using ${MAKE_PY_SCRIPT_PATH}..."
 
-          # Execute Make.py build command from repository root
-          # Added --configurationPath and --output-build-artifacts-path arguments
-          # Using 'release_universal' for configuration based on previous error message
-          # *** IMPORTANT: Still verify the exact flag for disabling signing (--disable-provisioning is placeholder) ***
-          python3 "${MAKE_PY_SCRIPT_PATH}" build \
-            --configurationPath="${{ env.CONFIG_JSON_PATH }}" \
-            --output-build-artifacts-path="${{ env.BUILD_OUTPUT_PATH }}" \ # <-- CORRECTED ARGUMENT
-            --configuration=release_arm64 \
-            --buildNumber=100001 \
-            --codesigningInformationPath=build-system/fake-codesigning
-            # <-- VERIFY/REPLACE THIS FLAG NAME
-            # Add other necessary flags from README (e.g., --platform=ios, specific build number if required)
+          # Execute Make.py build command - Putting command on a SINGLE LINE to avoid shell parsing issues with backslashes
+          python3 "${MAKE_PY_SCRIPT_PATH}" build --configurationPath="${{ env.CONFIG_JSON_PATH }}" --output-build-artifacts-path="${{ env.BUILD_OUTPUT_PATH }}" --configuration=release_arm64 buildNumber=100001 --codesigningInformationPath=build-system/fake-codesigning
+
+          # If Make.py needs other flags identified from README, add them to the end of the single line above. E.g:
+          # python3 "${MAKE_PY_SCRIPT_PATH}" build --configurationPath="${{ env.CONFIG_JSON_PATH }}" --output-build-artifacts-path="${{ env.BUILD_OUTPUT_PATH }}" --configuration=release_universal --some-other-flag
 
           echo "Make.py build finished. Artifacts should be in ${{ env.BUILD_OUTPUT_PATH }}"
           ls -lA "${{ env.BUILD_OUTPUT_PATH }}" # List output directory contents
