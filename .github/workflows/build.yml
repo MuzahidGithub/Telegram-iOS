@@ -1,0 +1,125 @@
+name: Build Telegram iOS
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to build'
+        required: true
+        default: 'master'
+      api_id:
+        description: 'Telegram API ID'
+        required: true
+      api_hash:
+        description: 'Telegram API Hash'
+        required: true
+      configuration:
+        description: 'Build configuration'
+        required: true
+        default: 'Release'
+        type: choice
+        options:
+          - Debug
+          - Release
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          repository: TelegramMessenger/Telegram-iOS
+          ref: ${{ github.event.inputs.branch }}
+          submodules: recursive
+
+      - name: Setup Xcode version
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '15.x'
+
+      - name: Install dependencies
+        run: |
+          brew install --formula cmake ninja
+          pip3 install buildconfig
+
+      - name: Set up API credentials
+        run: |
+          # Create config directory
+          mkdir -p buildbox/options/
+          
+          # Create API credentials file
+          cat > buildbox/options/config.json << EOF
+          {
+            "buildbox": {
+              "appSpecificApiId": ${{ github.event.inputs.api_id }},
+              "appSpecificApiHash": "${{ github.event.inputs.api_hash }}"
+            }
+          }
+          EOF
+          
+          # Show created file (without sensitive data)
+          echo "Created config.json file structure:"
+          cat buildbox/options/config.json | grep -v appSpecificApiHash
+
+      - name: Set up build environment
+        run: |
+          # Create directory for Telegram project
+          mkdir -p Telegram
+          
+          # Adjust bazel.rc if needed
+          touch Telegram/.bazelrc
+          
+          # Create build number file
+          echo "1" > buildbox/build_number
+
+      - name: Run make options
+        run: |
+          make -f Makefile.legacy options API_ID=${{ github.event.inputs.api_id }} API_HASH=${{ github.event.inputs.api_hash }}
+
+      - name: Generate Xcode project
+        run: |
+          # Generate Xcode project using legacy make
+          make -f Makefile.legacy project
+
+      - name: Build with Xcode (No Code Signing)
+        run: |
+          # Build without code signing
+          xcodebuild -project Telegram-iOS.xcodeproj -scheme Telegram -configuration ${{ github.event.inputs.configuration }} \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            DEVELOPMENT_TEAM="" \
+            ONLY_ACTIVE_ARCH=NO \
+            build
+
+      - name: Create unsigned IPA
+        run: |
+          # Find the built app
+          APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -name "Telegram.app" -type d | grep -v "PlugIns" | head -n 1)
+          
+          echo "Found app at: $APP_PATH"
+          
+          if [ -z "$APP_PATH" ]; then
+            echo "Failed to find Telegram.app"
+            exit 1
+          fi
+          
+          # Create Payload directory and copy the app
+          mkdir -p Payload
+          cp -R "$APP_PATH" Payload/
+          
+          # Create the IPA
+          zip -r Telegram-unsigned.ipa Payload
+          
+          # Move the IPA to outputs
+          mkdir -p build/outputs
+          mv Telegram-unsigned.ipa build/outputs/
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Telegram-unsigned
+          path: build/outputs/Telegram-unsigned.ipa
